@@ -1,0 +1,133 @@
+cabal-version:      3.0
+name:               hbayesian
+version:            0.1.0.0
+synopsis:           Composable Bayesian inference in Haskell on StableHLO/XLA
+description:
+    HBayesian is a library of samplers for StableHLO/XLA that works on CPU and GPU.
+    It provides stateless, composable transition kernels for MCMC, variational inference,
+    and sequential Monte Carlo, built on top of the HHLO Haskell frontend.
+license:            MIT
+license-file:       LICENSE
+author:             hbayesian contributors
+maintainer:         le.niu@hotmail.com
+category:           Math, Statistics, AI
+build-type:         Simple
+tested-with:        GHC == 9.6.7
+
+extra-doc-files:
+    CHANGELOG.md
+    README.md
+
+source-repository head
+    type:     git
+    location: https://github.com/overshiki/hbayesian.git
+
+common warnings
+    ghc-options:
+        -Wall
+        -Wcompat
+        -Widentities
+        -Wincomplete-record-updates
+        -Wincomplete-uni-patterns
+        -Wmissing-export-lists
+        -Wmissing-home-modules
+        -Wpartial-fields
+        -Wredundant-constraints
+
+library
+    import:           warnings
+    exposed-modules:
+        HBayesian.Core
+        HBayesian.HHLO.Ops
+        HBayesian.HHLO.RNG
+        HBayesian.HHLO.Loops
+        HBayesian.HHLO.Compile
+        HBayesian.InferenceLoop
+        HBayesian.MCMC.RandomWalk
+        HBayesian.MCMC.EllipticalSlice
+        HBayesian.MCMC.HMC
+        HBayesian.MCMC.MALA
+    build-depends:
+        base >= 4.18 && < 4.20
+      , hhlo >= 0.2.0.0
+      , text
+      , vector
+    hs-source-dirs:   src
+    default-language: Haskell2010
+    default-extensions:
+        DataKinds
+        KindSignatures
+        TypeApplications
+        TypeFamilies
+        TypeOperators
+        ScopedTypeVariables
+
+executable hbayesian-demo
+    import:           warnings
+    main-is:          Main.hs
+    build-depends:
+        base
+      , hbayesian
+      , hhlo >= 0.2.0.0
+      , text
+    hs-source-dirs:   app
+    default-language: Haskell2010
+
+executable hbayesian-examples
+    import:           warnings
+    main-is:          Main.hs
+    other-modules:
+        Common
+        LinearRegressionRandomWalk
+        GaussianProcessEllipticalSlice
+        LogisticRegressionHMC
+        BivariateGaussianMALA
+    build-depends:
+        base
+      , hbayesian
+      , hhlo >= 0.2.0.0
+      , text
+    hs-source-dirs:   examples
+    default-language: Haskell2010
+    default-extensions:
+        DataKinds
+        KindSignatures
+        TypeApplications
+        TypeFamilies
+        TypeOperators
+        ScopedTypeVariables
+
+test-suite hbayesian-test
+    import:           warnings
+    type:             exitcode-stdio-1.0
+    main-is:          Main.hs
+    other-modules:
+        Test.Core
+        Test.HHLO.Ops
+        Test.HHLO.RNG
+        Test.HHLO.Loops
+        Test.MCMC
+        Test.Examples
+        Common
+        LinearRegressionRandomWalk
+        GaussianProcessEllipticalSlice
+        LogisticRegressionHMC
+        BivariateGaussianMALA
+    build-depends:
+        base
+      , hbayesian
+      , hhlo >= 0.2.0.0
+      , text
+      , tasty
+      , tasty-hunit
+      , tasty-golden
+      , bytestring
+    hs-source-dirs:   test, examples
+    default-language: Haskell2010
+    default-extensions:
+        DataKinds
+        KindSignatures
+        TypeApplications
+        TypeFamilies
+        TypeOperators
+        ScopedTypeVariables
