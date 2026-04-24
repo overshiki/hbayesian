@@ -11,19 +11,21 @@ module LinearRegressionRandomWalk
   , linearRegLogPdf
   , makeKernel
   , renderStepMlir
+  , runChain
   ) where
 
+import           Data.Word           (Word64)
 import           Data.Text           (Text)
 import           HHLO.Core.Types
 import           HHLO.IR.AST         (FuncArg(..), TensorType(..))
 import           HHLO.IR.Builder
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops
+import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.RandomWalk
 import           Common
 
 -- | Fixed synthetic dataset (n = 5).
--- True parameters: alpha = 1.0, beta = 1.5, sigma^2 = 0.25
 dataset :: [(Float, Float)]
 dataset =
   [ (0.0,  0.5)
@@ -34,14 +36,11 @@ dataset =
   ]
 
 -- | Log-posterior for Bayesian linear regression.
--- Parameters are packed as theta = [alpha, beta].
 linearRegLogPdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
 linearRegLogPdf theta = do
-  -- Unpack parameters
   alpha <- tslice1 @2 @'F32 theta 0
   beta  <- tslice1 @2 @'F32 theta 1
 
-  -- Likelihood: sum over data points (unrolled for n=5)
   let likelihoodPoint (x, y) = do
         xT <- tconstant @'[] @'F32 (realToFrac x)
         yT <- tconstant @'[] @'F32 (realToFrac y)
@@ -49,7 +48,6 @@ linearRegLogPdf theta = do
         predVal <- tadd alpha betaX
         diff <- tsub yT predVal
         diffSq <- tmul diff diff
-        -- -0.5 * diff^2 / 0.25 = -2.0 * diff^2
         negTwo <- tconstant @'[] @'F32 (-2.0)
         tmul negTwo diffSq
 
@@ -64,7 +62,6 @@ linearRegLogPdf theta = do
   llh0123 <- tadd llh01 llh23
   llh <- tadd llh0123 llh4
 
-  -- Prior: log N(alpha|0,1) + log N(beta|0,1)
   alphaSq <- tmul alpha alpha
   betaSq  <- tmul beta beta
   negHalf <- tconstant @'[] @'F32 (-0.5)
@@ -90,3 +87,51 @@ renderStepMlir =
       ld  <- arg @'[] @'F32
       (state', _info) <- kernelStep (makeKernel (RWConfig 0.1)) (Key key) (State pos ld)
       return (statePosition state')
+
+-- | Tier B: run a short chain on PJRT and return the sampled positions.
+runChain :: IO [[Float]]
+runChain = withPJRTCPU $ \api client -> do
+    let kernel = makeKernel (RWConfig 0.1)
+
+    -- Compile the log-pdf module
+    let ldMod = moduleFromBuilder @'[] @'F32 "main"
+                  [ FuncArg "pos" (TensorType [2] F32) ] $ do
+          pos <- arg @'[2] @'F32
+          linearRegLogPdf pos
+    ldExe <- compileModule api client ldMod
+
+    -- Compile the kernel-step module (single result: position)
+    let stepMod = moduleFromBuilder @'[2] @'F32 "main"
+                    [ FuncArg "key" (TensorType [2] UI64)
+                    , FuncArg "pos" (TensorType [2] F32)
+                    , FuncArg "ld"  (TensorType [] F32)
+                    ] $ do
+          key <- arg @'[2] @'UI64
+          pos <- arg @'[2] @'F32
+          ld  <- arg @'[] @'F32
+          (state', _info) <- kernelStep kernel (Key key) (State pos ld)
+          return (statePosition state')
+    stepExe <- compileModule api client stepMod
+
+    let seed :: Word64 = 42
+        pos0 = [0.0, 0.0]
+
+    -- Compute initial log-density
+    posBuf0 <- bufferFromF32 api client [2] pos0
+    [ldBuf0] <- executeModule api ldExe [posBuf0]
+    [ld0] <- bufferToF32 api ldBuf0 1
+
+    loop api client stepExe ldExe seed (0 :: Int) pos0 ld0 (10 :: Int) []
+  where
+    loop _ _ _ _ _ _ _ _ 0 acc = return (reverse acc)
+    loop api client stepExe ldExe seed step pos ld n acc = do
+        let key = [seed, fromIntegral step]
+        keyBuf <- bufferFromUI64 api client [2] key
+        posBuf <- bufferFromF32 api client [2] pos
+        ldBuf  <- bufferFromF32 api client [] [ld]
+        [newPosBuf] <- executeModule api stepExe [keyBuf, posBuf, ldBuf]
+        newPos <- bufferToF32 api newPosBuf 2
+        -- Recompute log-density for the next step
+        [newLdBuf] <- executeModule api ldExe [newPosBuf]
+        [newLd] <- bufferToF32 api newLdBuf 1
+        loop api client stepExe ldExe seed (step + 1) newPos newLd (n - 1) (newPos : acc)
