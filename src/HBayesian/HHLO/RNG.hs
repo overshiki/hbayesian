@@ -27,9 +27,8 @@ import           HBayesian.HHLO.Ops
 
 splitKey :: Key -> Builder (Key, Key)
 splitKey (Key k) = do
-  (k1, _) <- rngBitGenerator @'[2] k
-  (k2, _) <- rngBitGenerator @'[2] k1
-  return (Key k1, Key k2)
+  (k1, bits) <- rngBitGenerator @'[2] k
+  return (Key k1, Key bits)
 
 -----------------------------------------------------------------------------
 -- Uniform [0,1)

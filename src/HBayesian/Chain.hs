@@ -27,6 +27,7 @@ module HBayesian.Chain
   , verbose
     -- * Running chains
   , sampleChain
+  , parallelChains
   , Diagnostic (..)
   ) where
 

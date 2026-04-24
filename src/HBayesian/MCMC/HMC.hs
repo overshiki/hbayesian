@@ -59,7 +59,7 @@ hmc logpdf grad config = Kernel { kernelInit = kernelInit, kernelStep = kernelSt
         pSum <- tsumAll pSq
         half <- constant @'[] @d 0.5
         tmul half pSum
-      currentH <- tsub ld0 currentK
+      currentH <- tsub currentK ld0
 
       (pos', p', g', ld') <- leapfrog pos0 p0 g0
 
@@ -68,7 +68,7 @@ hmc logpdf grad config = Kernel { kernelInit = kernelInit, kernelStep = kernelSt
         pSum <- tsumAll pSq
         half <- constant @'[] @d 0.5
         tmul half pSum
-      proposedH <- tsub ld' proposedK
+      proposedH <- tsub proposedK ld'
 
       logAccept <- tsub currentH proposedH
       zero <- constant @'[] @d 0.0

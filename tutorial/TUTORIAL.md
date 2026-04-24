@@ -1,13 +1,12 @@
 # HBayesian Tutorial
 
-> **Updated for v0.2.** This tutorial covers both the original v0.1 APIs (kernels, manual buffer management) and the new v0.2 abstractions (Chain combinators, PPL layer, diagnostics).
+> **Updated for v0.2.** This tutorial teaches the current API: chain combinators (`sampleChain`, `burnIn`, `thin`, `parallelChains`), the PPL layer, and diagnostics. Low-level kernel design and manual PJRT buffer management are covered in Level 2 for algorithm authors.
 
 This tutorial has two levels.
 
 - **Level 1** is for *users* who want to run Bayesian inference on their models. You will learn the ideas, the procedure, and the meaning of every public function you call.
 - **Level 2** is for *algorithm designers* who want to implement new samplers. You will learn the low-level `Builder` API, the PRNG system, and the full path from a Haskell function to a PJRT executable.
 
-At the end we reflect on the API itself: what feels natural, what feels mechanical, and how the interface could evolve.
 
 ---
 
@@ -21,8 +20,9 @@ In HBayesian this is always done with **MCMC** (Markov Chain Monte Carlo). The p
 
 1. Write a **log-posterior** function `p(θ | data)`.
 2. Choose a **sampler** (RandomWalk, EllipticalSlice, HMC, MALA).
-3. Run a **chain**: starting from an initial guess, the sampler repeatedly proposes new parameter values and decides whether to keep them.
-4. Collect the **samples** and use them for estimation, prediction, or visualization.
+3. **Compile** the model and sampler into a `CompiledKernel`.
+4. Run a **chain** via `sampleChain` with optional burn-in and thinning.
+5. Collect the **samples** and diagnostics, then use them for estimation, prediction, or visualization.
 
 Every sampler in HBayesian is a pure function that compiles to a self-contained StableHLO module and executes on PJRT (CPU, GPU, or TPU). There is no "interpreter mode". The chain itself runs on the device; the host only drives the loop.
 
@@ -35,19 +35,26 @@ Here is the smallest complete program that actually samples.
 ```haskell
 {-# LANGUAGE DataKinds        #-}
 {-# LANGUAGE TypeApplications #-}
-{-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
+import HBayesian.Chain
+import HBayesian.MCMC.RandomWalk
+import HBayesian.Diagnostics (acceptanceRate)
 import qualified LinearRegressionRandomWalk as Ex
 
 main :: IO ()
 main = do
-    samples <- Ex.runChain       -- IO [[Float]]
+    let kernel = randomWalk Ex.linearRegLogPdf (RWConfig 0.1)
+        ck     = compileSimpleKernel kernel Ex.linearRegLogPdf
+    (samples, diags) <- sampleChain ck [0.0, 0.0] $
+        burnIn 100 $ thin 1 $ defaultChainConfig { ccNumIterations = 10 }
+
     putStrLn "First sample:"
     print (head samples)
     putStrLn "Last sample:"
     print (last samples)
+    putStrLn $ "Acceptance rate: " ++ show (acceptanceRate diags)
 ```
 
 Run it:
@@ -57,6 +64,14 @@ cabal run hbayesian-examples -- --execute
 ```
 
 You will see 10 parameter vectors printed. Each vector `[alpha, beta]` is a draw from the posterior of the Bayesian linear regression model. The chain starts near `[0,0]` and gradually drifts toward the region favoured by the data.
+
+What is happening under the hood:
+
+1. `compileSimpleKernel` compiles the log-posterior and the `kernelStep` into PJRT executables inside a fresh PJRT context.
+2. `sampleChain` creates device buffers, runs the host loop, collects positions, and returns them as `[[Float]]`.
+3. `burnIn 100` tells `sampleChain` to discard the first 100 steps before collecting samples.
+4. `thin 1` keeps every sample (set to `thin 2` to keep every second sample, etc.).
+5. `acceptanceRate diags` computes the fraction of accepted proposals from the diagnostic records.
 
 ---
 
@@ -105,18 +120,53 @@ makeKernel :: RWConfig -> SimpleKernel '[2] 'F32
 makeKernel config = randomWalk linearRegLogPdf config
 ```
 
-#### `runChain :: IO [[Float]]`
+#### `compileSimpleKernel` and `compileHMC`
 
-This is *not* part of the library core. It lives in the example modules and shows you the complete execution pattern. Conceptually it does:
+These turn a `Kernel` into a `CompiledKernel` — a record that holds the compiled StableHLO modules for log-density evaluation, gradient evaluation (if HMC), and the step function:
 
-1. Load the PJRT plugin.
-2. Compile the log-posterior to a PJRT executable.
-3. Compile `kernelStep` to a PJRT executable (wrapped to return a single result).
-4. Create buffers for the key, position, log-density, etc.
-5. Loop N times: execute step → read back position → recompute log-density → feed into next iteration.
-6. Return the list of sampled positions.
+```haskell
+compileSimpleKernel :: Kernel s d state info
+                    -> (Tensor s d -> Builder (Tensor '[] d))
+                    -> CompiledKernel
 
-You can copy `runChain` into your own project and adapt the shapes, initial values, and loop length.
+compileHMC :: Kernel s d (HMCState s d) info
+           -> (Tensor s d -> Builder (Tensor '[] d))
+           -> Gradient s d
+           -> CompiledKernel
+```
+
+`CompiledKernel` is a pure value; it does not hold PJRT handles. The actual PJRT compilation happens inside `sampleChain`, which opens a PJRT context, compiles the modules, executes the chain, and closes the context on return.
+
+#### `sampleChain :: CompiledKernel -> [Float] -> ChainConfig -> IO ([[Float]], [Diagnostic])`
+
+This is the workhorse. It hides the entire compilation and execution pipeline:
+
+- Opens a fresh PJRT context.
+- Compiles the log-posterior, gradient (if HMC), and step modules.
+- Creates buffers for key, position, momentum, log-density, etc.
+- Runs the host loop for `burnIn + numIterations * thinning` steps.
+- Applies burn-in and thinning.
+- Closes the PJRT context.
+- Returns pure Haskell lists plus diagnostics.
+
+```haskell
+sampleChain ck [0.0, 0.0] $
+    burnIn 500 $ thin 2 $ defaultChainConfig
+        { ccNumIterations = 2000
+        , ccSeed = 42
+        }
+```
+
+Available combinators: `burnIn`, `thin`, `withSeed`, `verbose`.
+
+#### `parallelChains :: Int -> ([Float] -> [Float]) -> CompiledKernel -> [Float] -> ChainConfig -> IO [([[Float]], [Diagnostic])]`
+
+Run multiple independent chains with distinct PRNG seeds. This is essential for computing Gelman-Rubin R-hat convergence diagnostics.
+
+```haskell
+results <- parallelChains 4 (map (+ 0.5)) ck (replicate 5 0.0) config
+let chains = map fst results
+```
 
 ---
 
@@ -157,12 +207,10 @@ Here is a template:
 
 module MyInference where
 
-import HBayesian.Core
-import HBayesian.HHLO.Ops
-import HBayesian.HHLO.PJRT
+import HBayesian.Chain
 import HBayesian.MCMC.RandomWalk
+import HBayesian.HHLO.Ops
 import HHLO.IR.Builder
-import Common
 
 -- 1. Define the log-posterior
 myLogPdf :: Tensor '[3] 'F32 -> Builder (Tensor '[] 'F32)
@@ -170,22 +218,42 @@ myLogPdf theta = do
     -- your model here
     return logP
 
--- 2. Build the kernel
+-- 2. Build and compile the kernel
 myKernel :: SimpleKernel '[3] 'F32
 myKernel = randomWalk myLogPdf (RWConfig 0.05)
 
--- 3. Run a chain (adapt from LinearRegressionRandomWalk.runChain)
-runMyChain :: IO [[Float]]
-runMyChain = withPJRTCPU $ \api client -> do
-    -- compile modules, create buffers, loop ...
-    return samples
+myCompiledKernel :: CompiledKernel
+myCompiledKernel = compileSimpleKernel myKernel myLogPdf
+
+-- 3. Run a chain
+runMyChain :: IO ([[Float]], [Diagnostic])
+runMyChain = sampleChain myCompiledKernel [0.0, 0.0, 0.0] $
+    burnIn 100 $ thin 2 $ defaultChainConfig { ccNumIterations = 1000 }
 ```
 
-The example modules in `examples/` are the best reference. Copy the one whose sampler matches your needs and replace the log-posterior, shapes, and initial values.
+The example modules in `examples/` are the best reference. Import the one whose sampler matches your needs and replace the log-posterior, shapes, and initial values.
 
 ---
 
-### 1.6 Sampler selection guide
+### 1.6 Diagnostics
+
+The `HBayesian.Diagnostics` module provides host-side diagnostics on the `Diagnostic` records collected by `sampleChain`:
+
+```haskell
+import HBayesian.Diagnostics
+
+-- After running sampleChain:
+acceptanceRate diags         -- fraction of accepted proposals
+meanAcceptProb diags         -- mean acceptance probability
+rHat [diags1, diags2, ...]   -- Gelman-Rubin across chains (on accept probs)
+ess diags                    -- naive autocorrelation ESS
+```
+
+For rigorous validation, see `examples/CorrelatedGaussianHMC.hs` and `test/Test/CorrelatedGaussian.hs`, which apply statistical goodness-of-fit tests (KS, marginal moments, Mahalanobis χ², R-hat) to verify that HMC samples match the known analytical target.
+
+---
+
+### 1.7 Sampler selection guide
 
 | Situation | Recommended sampler | Why |
 |-----------|---------------------|-----|
@@ -194,6 +262,29 @@ The example modules in `examples/` are the best reference. Copy the one whose sa
 | High dimension, gradient available | HMC | Informed proposals, good mixing |
 | High dimension, gradient available, cheap iterations | MALA | Simpler than HMC, still uses gradient |
 | Pathological geometry (strong correlations) | HMC with small step size | RandomWalk and ESS may get stuck |
+
+---
+
+### 1.8 The PPL layer
+
+Instead of writing log-densities manually, you can use the shallow PPL in `HBayesian.PPL`:
+
+```haskell
+import HBayesian.PPL
+
+myModel :: PPL 2 ()
+myModel = do
+    alpha <- param 0
+    beta  <- param 1
+    observe "alpha_prior" (normal 0.0 1.0) alpha
+    observe "beta_prior"  (normal 0.0 1.0) beta
+    -- likelihood observations ...
+
+logpdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
+logpdf = runPPL myModel
+```
+
+`runPPL` desugars the generative story into the same `Tensor s F32 -> Builder (Tensor '[] F32)` that you would write manually. The rest of the pipeline (`compileSimpleKernel`, `sampleChain`, etc.) is unchanged.
 
 ---
 
@@ -521,6 +612,8 @@ Notice the pattern:
 
 The log-density must be recomputed on the host because the *next* `kernelStep` needs it as input. This is a consequence of the single-result limitation: if `kernelStep` could return both the new position *and* the new log-density, we would save one device round-trip per iteration.
 
+In practice, you rarely write this loop yourself. Use `HBayesian.Chain.sampleChain` instead.
+
 ---
 
 ### 2.7 Conditional logic in `Builder`
@@ -570,62 +663,23 @@ Now that we have seen both levels, let us reflect on the API design.
 
 **Single-backend discipline.** There is no "fallback interpreter". If it compiles, it runs on PJRT. This eliminates the "works in test, fails on device" class of bugs.
 
+**Chain combinators.** `sampleChain`, `burnIn`, `thin`, `parallelChains`, and `HBayesian.Diagnostics` remove the need for users to copy host-loop boilerplate from example modules. The common case is now a one-liner.
+
 ### What feels mechanical
 
-**Buffer management.** Creating buffers, transferring data, and reading results is verbose and error-prone. The host loop in `runChain` is mostly plumbing.
+**Buffer management (for algorithm authors).** Creating buffers, transferring data, and reading results is verbose and error-prone. End users never see this thanks to `sampleChain`, but anyone implementing a new sampler still deals with it.
 
 **Single-result limitation.** Because the PJRT CPU plugin only supports functions with a single return value, every `kernelStep` must be wrapped in a module that returns exactly one tensor. This forces the host to recompute log-density after every step, wasting a device round-trip.
 
 **Explicit key splitting.** Every sampler begins with `splitKey`. This is correct but repetitive. A higher-level combinator could hide this.
 
-**No built-in `sampleChain`.** Users must copy the host loop from an example module. There is no library function like:
-
-```haskell
-sampleChain :: Kernel s d state info
-            -> Int              -- number of iterations
-            -> Tensor s d        -- initial position
-            -> IO [Tensor s d]   -- samples
-```
-
 ### Directions for improvement
 
-> **Status as of v0.2:** The following improvements have been implemented:
-> - `sampleChain` combinator with `burnIn`, `thin`, `withSeed`, `parallelChains`
-> - `HBayesian.Diagnostics` module with acceptance rate, R-hat, and ESS
-> - Shallow PPL layer with `param`, `observe`, and distribution primitives
->
-> What remains open: deeper PPL features (plate notation, constrained parameters, structured parameter trees), multi-result PJRT functions, and a monadic `Chain` type for composable workflows.
-
-#### 1. A `sampleChain` combinator
-
-Implemented in v0.2 as `HBayesian.Chain.sampleChain`:
-
-```haskell
-sampleChain :: CompiledKernel -> [Float] -> ChainConfig -> IO ([[Float]], [Diagnostic])
-```
-
-This hides the entire compilation and execution pipeline:
-- Compiles modules inside a fresh PJRT context.
-- Manages buffers.
-- Runs the host loop.
-- Applies burn-in and thinning.
-- Returns pure Haskell lists plus diagnostics.
-
-Usage:
-
-```haskell
-import HBayesian.Chain
-
-ck <- compileSimpleKernel kernel logpdf
-(samples, diags) <- sampleChain ck [0.0, 0.0] $
-    burnIn 100 $ thin 2 $ defaultChainConfig { ccNumIterations = 1000 }
-```
-
-#### 2. Multi-result support
+#### 1. Multi-result support
 
 When PJRT CPU supports multi-result functions (or when we target GPU/TPU where this already works), `kernelStep` could return both the new state and auxiliary values in a single execution. This would eliminate the per-iteration log-density recomputation and roughly halve the device round-trips.
 
-#### 3. Monadic chain composition
+#### 2. Monadic chain composition
 
 A small monadic API for chain manipulation would be powerful:
 
@@ -645,31 +699,15 @@ myExperiment = do
     sampleChain hmcKernel 5000 pos1
 ```
 
-#### 4. PPL layer on top
+#### 3. Deeper PPL features
 
-Implemented in v0.2 as `HBayesian.PPL`:
+The current PPL layer (`HBayesian.PPL`) supports `param`, `observe`, and basic distributions (`normal`, `uniform`, `halfNormal`, `bernoulli`). What remains for future work:
 
-```haskell
-import HBayesian.PPL
+- `plate` notation for independent replicates
+- Constrained parameter transformations (simplex, positive)
+- Structured parameter trees (pytrees)
 
-myModel :: PPL 2 ()
-myModel = do
-    alpha <- param 0
-    beta  <- param 1
-    observe "alpha_prior" (normal 0.0 1.0) alpha
-    observe "beta_prior"  (normal 0.0 1.0) beta
-    forM_ dataset $ \(x, y) -> do
-        mu <- liftBuilder $ tadd alpha =<< tmul beta =<< tconstant x
-        sigma <- liftBuilder $ tconstant 0.5
-        yT <- liftBuilder $ tconstant y
-        observe "y" (normalT mu sigma) yT
-```
-
-This desugars to the same `logPdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)` that we write manually today.
-
-What remains for future work: `plate` notation, constrained parameter transformations (simplex, positive), and structured parameter trees (pytrees).
-
-#### 5. Automatic differentiation
+#### 4. Automatic differentiation
 
 Phase 5 will add source-to-source AD on StableHLO. When this lands, HMC and MALA will no longer require the user to provide `Gradient`. The API will become:
 
@@ -684,4 +722,4 @@ This preserves backward compatibility (you can still pass an analytical gradient
 
 ### Conclusion
 
-HBayesian v0.2 adds higher-level conveniences — `sampleChain`, chain combinators, diagnostics, and a shallow PPL layer — on top of the solid v0.1 foundation without compromising the core design. The `Kernel` type remains the right abstraction for algorithm designers, while end users can now write models in the PPL and sample with one-line `sampleChain` calls.
+HBayesian v0.2 adds higher-level conveniences — `sampleChain`, chain combinators, diagnostics, and a shallow PPL layer — on top of the solid foundation without compromising the core design. The `Kernel` type remains the right abstraction for algorithm designers, while end users can now write models in the PPL and sample with one-line `sampleChain` calls.

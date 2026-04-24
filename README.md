@@ -18,7 +18,7 @@ The `Gradient` type is a simple function:
 type Gradient s d = Tensor s d -> Builder (Tensor s d)
 ```
 
-You can pass an analytical gradient directly. Auto-differentiation (source-to-source AD on StableHLO) is planned for Phase 5, but the API will not change when it arrives.
+You can pass an analytical gradient directly. 
 
 ### Kernel abstraction
 
@@ -54,13 +54,11 @@ HBayesian uses the same plugin-download strategy as HHLO. Run the bundled script
 
 This downloads `libpjrt_cpu.so` (and optionally GPU plugins if detected) into `deps/pjrt/`. The directory is gitignored.
 
-**Override:** If you already have a PJRT plugin installed elsewhere, you can either set the environment variable:
+**Override:** If you already have a PJRT plugin installed elsewhere, set the environment variable:
 
 ```bash
 export HBAYESIAN_PJRT_PLUGIN=/path/to/libpjrt_cpu.so
 ```
-
-or pass it as a flag (see Tier B below).
 
 ### 2. Build
 
@@ -74,108 +72,13 @@ A comprehensive two-level tutorial lives in `tutorial/TUTORIAL.md`:
 
 - **Level 1** — Using inference algorithms (for end users)
 - **Level 2** — Designing inference algorithms (for algorithm authors)
-- **Introspection** — Reflection on API design and future directions
+
 
 ## Usage
 
-### Tier A — Render MLIR (works without PJRT)
+### Run a chain
 
-Each example can render its `kernelStep` to StableHLO MLIR text for inspection:
-
-```bash
-cabal run hbayesian-examples -- --render
-```
-
-`--render` is the default when no flags are given.
-
-### Tier B — Execute on PJRT
-
-Run the chains on the device:
-
-```bash
-cabal run hbayesian-examples -- --execute
-```
-
-With a custom plugin path:
-
-```bash
-cabal run hbayesian-examples -- --execute --pjrt-plugin /path/to/libpjrt_cpu.so
-```
-
-This compiles each example's kernels to PJRT executables, runs a short chain on the device, and prints the sampled positions. See all available flags with `--help`.
-
-### Define a model
-
-A model is just a log-posterior function:
-
-```haskell
-myLogPdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
-myLogPdf theta = do
-  alpha <- tslice1 @2 @'F32 theta 0
-  beta  <- tslice1 @2 @'F32 theta 1
-  -- ... likelihood + prior ...
-```
-
-### Build a kernel
-
-```haskell
-import HBayesian.MCMC.RandomWalk
-
-kernel :: SimpleKernel '[2] 'F32
-kernel = randomWalk myLogPdf (RWConfig 0.1)
-```
-
-A `Kernel` is a pure specification — it describes *what* one MCMC step does, not *how* to run it. The step is a `Builder` action that manipulates tensors. To actually sample, you compile it to StableHLO and execute via PJRT.
-
-### From kernel to executable
-
-The full pipeline looks like this:
-
-1. **Compile the log-posterior** (and gradient, if required) into separate PJRT executables so the host can evaluate them to initialise the chain.
-2. **Compile `kernelStep`** into a PJRT executable. Because the PJRT CPU plugin only supports single-result functions, wrap the step so it returns exactly one tensor (usually the new position).
-3. **Create device buffers** for the PRNG key, position, log-density, and any auxiliary state.
-4. **Run a host loop**: execute the step executable, read back the new position, recompute log-density/gradient for the next iteration, and repeat.
-
-The examples in `examples/` demonstrate the complete wiring. Here is the conceptual shape (see `LinearRegressionRandomWalk.hs` for the full implementation):
-
-```haskell
-import HBayesian.HHLO.PJRT
-import Common
-
-runChain :: IO [[Float]]
-runChain = withPJRTCPU $ \api client -> do
-    -- 1. Compile log-posterior
-    ldExe <- compileModule api client ldModule
-
-    -- 2. Compile kernel step (single-result wrapper)
-    stepExe <- compileModule api client stepModule
-
-    -- 3. Create initial buffers
-    keyBuf  <- bufferFromUI64 api client [2] [seed, 0]
-    posBuf  <- bufferFromF32  api client [2] [0.0, 0.0]
-    ...
-
-    -- 4. Host loop
-    loop api client stepExe ldExe ... 10 []
-```
-
-### Run a chain programmatically
-
-If you just want to see it work, import any example module and call its `runChain`:
-
-```haskell
-import HBayesian.HHLO.PJRT
-import qualified LinearRegressionRandomWalk as Ex
-
-main :: IO ()
-main = do
-  samples <- Ex.runChain
-  print (head samples)
-```
-
-### v0.2 — Chain Combinators (new)
-
-HBayesian v0.2 adds higher-level combinators that hide compilation and buffer management:
+The simplest way is through the chain combinators in `HBayesian.Chain`:
 
 ```haskell
 import HBayesian.Chain
@@ -184,19 +87,31 @@ import qualified LinearRegressionRandomWalk as Ex
 
 main :: IO ()
 main = do
-  let kernel = randomWalk Ex.linearRegLogPdf (RWConfig 0.1)
-  let ck = compileSimpleKernel kernel Ex.linearRegLogPdf
-  (samples, diags) <- sampleChain ck [0.0, 0.0] $
-      burnIn 100 $ thin 2 $ defaultChainConfig { ccNumIterations = 1000 }
-  print (head samples)
-  putStrLn $ "Acceptance rate: " ++ show (acceptanceRate diags)
+    let kernel = randomWalk Ex.linearRegLogPdf (RWConfig 0.1)
+    let ck = compileSimpleKernel kernel Ex.linearRegLogPdf
+    (samples, diags) <- sampleChain ck [0.0, 0.0] $
+        burnIn 100 $ thin 2 $ defaultChainConfig { ccNumIterations = 1000 }
+    print (head samples)
+    putStrLn $ "Acceptance rate: " ++ show (acceptanceRate diags)
 ```
 
 Available combinators: `compileSimpleKernel`, `compileHMC`, `sampleChain`, `burnIn`, `thin`, `withSeed`, `parallelChains`.
 
-### v0.2 — PPL Layer (new)
+Diagnostics (acceptance rate, R-hat, ESS) live in `HBayesian.Diagnostics`.
 
-Write models as generative stories instead of manual log-densities:
+### Define a model
+
+A model is just a log-posterior function:
+
+```haskell
+myLogPdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
+myLogPdf theta = do
+    alpha <- tslice1 @2 @'F32 theta 0
+    beta  <- tslice1 @2 @'F32 theta 1
+    -- ... likelihood + prior ...
+```
+
+Or use the PPL layer to write it as a generative story:
 
 ```haskell
 import HBayesian.PPL
@@ -213,21 +128,109 @@ logpdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
 logpdf = runPPL myModel
 ```
 
+### Build a kernel
+
+```haskell
+import HBayesian.MCMC.RandomWalk
+
+kernel :: SimpleKernel '[2] 'F32
+kernel = randomWalk myLogPdf (RWConfig 0.1)
+```
+
+A `Kernel` is a pure specification — it describes *what* one MCMC step does, not *how* to run it. The step is a `Builder` action that manipulates tensors. To actually sample, compile it with `compileSimpleKernel` or `compileHMC` and run via `sampleChain`.
+
+### Inspect MLIR (works without PJRT)
+
+Render a sampler's `kernelStep` to StableHLO MLIR text:
+
+```bash
+cabal run hbayesian-examples -- --render
+```
+
 ## Examples
 
-Practical examples live in `examples/` and demonstrate every Phase 2 sampler on a real statistical problem:
+Practical examples live in `examples/` and demonstrate every sampler on a real statistical problem:
 
-| Example | Sampler | Model | Mode |
-|---------|---------|-------|------|
-| `LinearRegressionRandomWalk.hs` | RandomWalk MH | Bayesian linear regression (2-D params) | Render + Execute |
-| `GaussianProcessEllipticalSlice.hs` | Elliptical Slice | GP regression with identity prior covariance | Render + Execute |
-| `LogisticRegressionHMC.hs` | HMC | Bayesian logistic regression with user-provided gradient | Render + Execute |
-| `BivariateGaussianMALA.hs` | MALA | 2-D correlated Gaussian target | Render + Execute |
+| Example | Sampler | Model | Run |
+|---------|---------|-------|-----|
+| `LinearRegressionRandomWalk.hs` | RandomWalk MH | Bayesian linear regression (2-D params) | `cabal run hbayesian-examples -- --execute` |
+| `GaussianProcessEllipticalSlice.hs` | Elliptical Slice | GP regression with identity prior covariance | `cabal run hbayesian-examples -- --execute` |
+| `LogisticRegressionHMC.hs` | HMC | Bayesian logistic regression with user-provided gradient | `cabal run hbayesian-examples -- --execute` |
+| `BivariateGaussianMALA.hs` | MALA | 2-D correlated Gaussian target | `cabal run hbayesian-examples -- --execute` |
+| `CorrelatedGaussianHMC.hs` | HMC | 5-D AR(1) Gaussian with analytical gradient + GoF tests | `cabal run correlated-gaussian-hmc` |
 
-Each example exposes:
-- `makeKernel` — factory for the sampler kernel
-- `renderStepMlir` — rendered MLIR text of a single `kernelStep`
-- `runChain` — actual PJRT execution that returns a list of posterior samples
+Each example exposes `makeKernel` (factory for the sampler kernel) and `runChain` (runs a short chain and returns samples).
+
+### Running a single example
+
+The CLI executable `hbayesian-examples` runs **all 4 basic examples in sequence**. To run just one:
+
+**Option 1 — GHCi (quickest)**
+
+```bash
+cabal repl hbayesian-examples
+```
+
+Then in the REPL:
+
+```haskell
+import qualified LinearRegressionRandomWalk as Ex
+Ex.runChain
+```
+
+**Option 2 — Small standalone script**
+
+Create `RunOne.hs` in the project root:
+
+```haskell
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE TypeApplications #-}
+
+import HBayesian.Diagnostics (acceptanceRate)
+import qualified LinearRegressionRandomWalk as Ex
+
+main :: IO ()
+main = do
+    (samples, diags) <- Ex.runChain
+    print (head samples)
+    putStrLn $ "Acceptance rate: " ++ show (acceptanceRate diags)
+```
+
+Run it:
+
+```bash
+cabal exec -- ghc -iexamples -isrc RunOne.hs -o run_one \
+  -package-db dist-newstyle/packagedb/ghc-9.6.7
+./run_one
+```
+
+### CorrelatedGaussianHMC — GoF regression test
+
+`CorrelatedGaussianHMC` is not just another demo — it is a **statistical regression test** for the HMC implementation. It targets a 5-D correlated Gaussian with AR(1) covariance (ρ = 0.7) where the precision matrix Λ and its gradient are derived analytically. Because the model is exact, any deviation in the samples points directly to a sampler bug.
+
+Run it and see the report:
+
+```bash
+cabal run correlated-gaussian-hmc
+```
+
+The report applies four independent checks to the HMC samples:
+
+- **Marginal moments** — each dimension's mean and variance match N(μᵢ, 1)
+- **Kolmogorov–Smirnov** — each marginal passes a KS test against the theoretical CDF
+- **Mahalanobis χ²** — mean of (x−μ)ᵀΛ(x−μ) ≈ 5 (degrees of freedom)
+- **Gelman–Rubin R-hat** — across 4 parallel chains, R-hat < 1.1 for every dimension
+
+You can also use it programmatically:
+
+```haskell
+import qualified CorrelatedGaussianHMC as Ex
+
+main :: IO ()
+main = do
+    (samples, diags) <- Ex.runChainV2
+    Ex.goodnessOfFitReport samples
+```
 
 ## Tests
 
@@ -235,13 +238,16 @@ Each example exposes:
 cabal test
 ```
 
-The test suite includes:
+The test suite includes 34 tests:
 - **Core** — type sanity checks for `Key`, `State`, `Info`, `Kernel`
 - **HHLO.Ops** — golden rendering tests for missing primitives (`sqrt`, `sin`, `cos`, `pow`, comparisons)
-- **HHLO.RNG** — smoke tests for `splitKey`, `rngUniformF32`, `rngNormalF32`
+- **HHLO.RNG** — rendering and key-splitting tests for `splitKey`, `rngUniformF32`, `rngNormalF32`
 - **HHLO.Loops** — rendering tests for `whileLoop` and `conditional`
 - **MCMC** — MLIR smoke tests for all four samplers
-- **Examples** — MLIR smoke tests for all four practical examples
+- **Examples** — MLIR smoke tests for all practical examples
+- **Chain** — `sampleChain` and `parallelChains` execution tests
+- **PPL** — PPL-derived model rendering tests
+- **CorrelatedGaussian** — rigorous GoF tests for HMC on a 5-D Gaussian (marginal means/variances, KS tests, Mahalanobis distance, R-hat across 4 chains)
 
 ## Project structure
 
@@ -252,24 +258,29 @@ hbayesian/
 |-- src/
 |   |-- HBayesian/
 |   |   |-- Core.hs                    -- Kernel, State, Info, Key, Gradient
+|   |   |-- Chain.hs                   -- Chain combinators: compileSimpleKernel, compileHMC, sampleChain, parallelChains
+|   |   |-- Diagnostics.hs             -- Host-side MCMC diagnostics (acceptanceRate, rHat, ess)
+|   |   |-- PPL.hs                     -- Shallow probabilistic programming layer
 |   |   |-- HHLO/
 |   |   |   |-- Ops.hs                 -- Primitives, comparisons, convenience aliases
 |   |   |   |-- RNG.hs                 -- Threefry PRNG, uniform/normal/bernoulli
 |   |   |   |-- Loops.hs               -- whileLoop, conditional
 |   |   |   |-- Compile.hs             -- renderBuilder, compileModule
 |   |   |   |-- PJRT.hs                -- Plugin discovery + execution helpers
-|   |   |-- InferenceLoop.hs           -- sampleChain (stub)
 |   |   |-- MCMC/
-|   |       |-- RandomWalk.hs
-|   |       |-- EllipticalSlice.hs
-|   |       |-- HMC.hs
-|   |       |-- MALA.hs
+|   |   |   |-- RandomWalk.hs
+|   |   |   |-- EllipticalSlice.hs
+|   |   |   |-- HMC.hs
+|   |   |   |-- MALA.hs
 |-- examples/                          -- Practical example suite
 |   |-- Common.hs
+|   |-- Main.hs                        -- CLI entry point for hbayesian-examples
+|   |-- CorrelatedGaussianHMCMain.hs   -- CLI entry point for correlated-gaussian-hmc
 |   |-- LinearRegressionRandomWalk.hs
 |   |-- GaussianProcessEllipticalSlice.hs
 |   |-- LogisticRegressionHMC.hs
 |   |-- BivariateGaussianMALA.hs
+|   |-- CorrelatedGaussianHMC.hs       -- 5-D Gaussian with GoF validation
 |-- test/                              -- Test suite
 |   |-- Test/
 |   |   |-- Core.hs
@@ -278,13 +289,17 @@ hbayesian/
 |   |   |-- HHLO/Loops.hs
 |   |   |-- MCMC.hs
 |   |   |-- Examples.hs
+|   |   |-- Chain.hs
+|   |   |-- PPL.hs
+|   |   |-- CorrelatedGaussian.hs
 ```
 
 ## Status
 
 - **Phase 1** (BIDSL Foundation): ✅ Complete — Core abstractions, RNG, loops, compilation utilities
 - **Phase 2** (MCMC Samplers): ✅ Complete — RandomWalk, EllipticalSlice, HMC, MALA + 4 practical examples with PJRT execution
-- **Phase 3+**: NUTS, adaptation, variational inference, auto-diff, and more — see `doc/` for design documents
+- **Phase 3** (Chain Combinators, PPL, GoF): ✅ Complete — `sampleChain`, `parallelChains`, `burnIn`, `thin`; shallow PPL (`param`, `observe`, `normal`, `uniform`, etc.); rigorous GoF example with 34 passing tests
+- **Phase 4+**: NUTS, adaptation, variational inference, auto-diff, and more — see `doc/` for design documents
 
 ## License
 
