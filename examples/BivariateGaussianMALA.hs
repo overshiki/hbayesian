@@ -12,6 +12,7 @@ module BivariateGaussianMALA
   , makeKernel
   , renderStepMlir
   , runChain
+  , runChainV2
   ) where
 
 import           Data.Word           (Word64)
@@ -24,6 +25,7 @@ import           HBayesian.HHLO.Ops
 import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.HMC (HMCState(..))
 import           HBayesian.MCMC.MALA
+import           HBayesian.Chain
 import           Common
 
 -- | Precision matrix Lambda = Sigma^{-1} for
@@ -186,3 +188,14 @@ runChain = withPJRTCPU $ \api client -> do
         [newGBuf] <- executeModule api gradExe [newPosBuf]
         newG <- bufferToF32 api newGBuf 2
         loop api client stepExe ldExe gradExe seed (step + 1) newPos newLd newG (n - 1) (newPos : acc)
+
+-- | v0.2: Run a chain using the 'Chain' combinators.
+runChainV2 :: IO ([[Float]], [Diagnostic])
+runChainV2 = do
+    let config = MALAConfig { malaStepSize = 0.1 }
+        kernel = makeKernel config
+        ck     = compileHMC kernel bivariateLogPdf bivariateGrad
+    sampleChain ck [0.0, 0.0] $ defaultChainConfig
+        { ccNumIterations = 10
+        , ccSeed = 42
+        }

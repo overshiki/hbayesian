@@ -13,6 +13,7 @@ module LogisticRegressionHMC
   , makeKernel
   , renderStepMlir
   , runChain
+  , runChainV2
   ) where
 
 import           Data.Word           (Word64)
@@ -24,6 +25,7 @@ import           HBayesian.Core
 import           HBayesian.HHLO.Ops
 import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.HMC
+import           HBayesian.Chain
 import           Common
 
 -- | Log-posterior for Bayesian logistic regression.
@@ -202,3 +204,14 @@ runChain = withPJRTCPU $ \api client -> do
         [newGBuf] <- executeModule api gradExe [newPosBuf]
         newG <- bufferToF32 api newGBuf 3
         loop api client stepExe ldExe gradExe seed (step + 1) newPos newLd newG (n - 1) (newPos : acc)
+
+-- | v0.2: Run a chain using the 'Chain' combinators.
+runChainV2 :: IO ([[Float]], [Diagnostic])
+runChainV2 = do
+    let config = HMCConfig { hmcStepSize = 0.1, hmcNumLeapfrogSteps = 2 }
+        kernel = makeKernel config
+        ck     = compileHMC kernel logisticRegLogPdf logisticRegGrad
+    sampleChain ck [0.0, 0.0, 0.0] $ defaultChainConfig
+        { ccNumIterations = 10
+        , ccSeed = 42
+        }

@@ -68,6 +68,14 @@ or pass it as a flag (see Tier B below).
 cabal build
 ```
 
+## Tutorial
+
+A comprehensive two-level tutorial lives in `tutorial/TUTORIAL.md`:
+
+- **Level 1** — Using inference algorithms (for end users)
+- **Level 2** — Designing inference algorithms (for algorithm authors)
+- **Introspection** — Reflection on API design and future directions
+
 ## Usage
 
 ### Tier A — Render MLIR (works without PJRT)
@@ -163,6 +171,46 @@ main :: IO ()
 main = do
   samples <- Ex.runChain
   print (head samples)
+```
+
+### v0.2 — Chain Combinators (new)
+
+HBayesian v0.2 adds higher-level combinators that hide compilation and buffer management:
+
+```haskell
+import HBayesian.Chain
+import HBayesian.MCMC.RandomWalk
+import qualified LinearRegressionRandomWalk as Ex
+
+main :: IO ()
+main = do
+  let kernel = randomWalk Ex.linearRegLogPdf (RWConfig 0.1)
+  let ck = compileSimpleKernel kernel Ex.linearRegLogPdf
+  (samples, diags) <- sampleChain ck [0.0, 0.0] $
+      burnIn 100 $ thin 2 $ defaultChainConfig { ccNumIterations = 1000 }
+  print (head samples)
+  putStrLn $ "Acceptance rate: " ++ show (acceptanceRate diags)
+```
+
+Available combinators: `compileSimpleKernel`, `compileHMC`, `sampleChain`, `burnIn`, `thin`, `withSeed`, `parallelChains`.
+
+### v0.2 — PPL Layer (new)
+
+Write models as generative stories instead of manual log-densities:
+
+```haskell
+import HBayesian.PPL
+
+myModel :: PPL 2 ()
+myModel = do
+    alpha <- param 0
+    beta  <- param 1
+    observe "alpha_prior" (normal 0.0 1.0) alpha
+    observe "beta_prior"  (normal 0.0 1.0) beta
+    -- likelihood observations ...
+
+logpdf :: Tensor '[2] 'F32 -> Builder (Tensor '[] 'F32)
+logpdf = runPPL myModel
 ```
 
 ## Examples

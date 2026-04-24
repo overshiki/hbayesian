@@ -43,6 +43,9 @@ library
         HBayesian.HHLO.Loops
         HBayesian.HHLO.Compile
         HBayesian.HHLO.PJRT
+        HBayesian.Chain
+        HBayesian.Diagnostics
+        HBayesian.PPL
         HBayesian.InferenceLoop
         HBayesian.MCMC.RandomWalk
         HBayesian.MCMC.EllipticalSlice
@@ -111,6 +114,8 @@ test-suite hbayesian-test
         Test.HHLO.Loops
         Test.MCMC
         Test.Examples
+        Test.Chain
+        Test.PPL
         Common
         LinearRegressionRandomWalk
         GaussianProcessEllipticalSlice
