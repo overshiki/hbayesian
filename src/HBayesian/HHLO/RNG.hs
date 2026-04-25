@@ -93,4 +93,4 @@ rngNormalF64 key = do
 rngBernoulli :: forall s. KnownShape s => Key -> Tensor s 'F32 -> Builder (Tensor s 'Bool)
 rngBernoulli key probs = do
   u <- rngUniformF32 key
-  lessThanEW u probs
+  lessThan u probs
