@@ -18,6 +18,7 @@ module HBayesian.Chain
     CompiledKernel
   , compileSimpleKernel
   , compileHMC
+  , compileNUTS
     -- * Chain configuration
   , ChainConfig (..)
   , defaultChainConfig
@@ -62,6 +63,7 @@ import           HHLO.Runtime.PJRT.Types (PJRTApi, PJRTClient, PJRTExecutable, P
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops hiding (map)
 import           HBayesian.MCMC.HMC  (HMCState (..))
+import           HBayesian.MCMC.NUTS (NUTSState (..), nutsPosition)
 
 -----------------------------------------------------------------------------
 -- Plugin discovery
@@ -232,6 +234,43 @@ compileHMC kernel logpdf grad =
           g   <- arg @s @d
           (state', _info) <- kernelStep kernel (Key key) (HMCState pos p ld g)
           return (hmcPosition state')
+    in CompiledKernel ldMod (Just gradMod) stepMod (shapeList @s) HMCStep
+
+-- | Build a 'CompiledKernel' from a NUTS kernel.
+--
+-- Same interface as 'compileHMC' since NUTS uses the same
+-- 5-argument step module (key, pos, momentum, log-density, gradient).
+compileNUTS :: forall s d info.
+               (KnownShape s, KnownDType d)
+            => Kernel s d (NUTSState s d) info
+            -> (Tensor s d -> Builder (Tensor '[] d))
+            -> Gradient s d
+            -> CompiledKernel
+compileNUTS kernel logpdf grad =
+    let ldMod = moduleFromBuilder @'[] @d "main"
+                  [FuncArg "theta" (tensorTypeOf @s @d)] $ do
+          theta <- arg @s @d
+          logpdf theta
+
+        gradMod = moduleFromBuilder @s @d "main"
+                    [FuncArg "theta" (tensorTypeOf @s @d)] $ do
+          theta <- arg @s @d
+          grad theta
+
+        stepMod = moduleFromBuilder @s @d "main"
+                    [ FuncArg "key" keyType
+                    , FuncArg "pos" (tensorTypeOf @s @d)
+                    , FuncArg "p"   (tensorTypeOf @s @d)
+                    , FuncArg "ld"  (tensorTypeOf @'[] @d)
+                    , FuncArg "g"   (tensorTypeOf @s @d)
+                    ] $ do
+          key <- arg @'[2] @'UI64
+          pos <- arg @s @d
+          p   <- arg @s @d
+          ld  <- arg @'[] @d
+          g   <- arg @s @d
+          (state', _info) <- kernelStep kernel (Key key) (NUTSState pos p ld g)
+          return (nutsPosition state')
     in CompiledKernel ldMod (Just gradMod) stepMod (shapeList @s) HMCStep
 
 -----------------------------------------------------------------------------

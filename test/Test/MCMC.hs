@@ -20,6 +20,7 @@ import qualified HBayesian.HHLO.RNG as RNG
 import           HBayesian.MCMC.EllipticalSlice
 import           HBayesian.MCMC.HMC
 import           HBayesian.MCMC.MALA
+import           HBayesian.MCMC.NUTS
 
 render1 :: forall s d. (KnownShape s, KnownDType d)
         => [FuncArg] -> Builder (Tensor s d) -> Text
@@ -124,6 +125,27 @@ tests = testGroup "MCMC"
       assertBool "contains rng_bit_generator" (T.isInfixOf "stablehlo.rng_bit_generator" mlir)
       assertBool "contains add" (T.isInfixOf "stablehlo.add" mlir)
       assertBool "contains multiply" (T.isInfixOf "stablehlo.multiply" mlir)
+      assertBool "contains select" (T.isInfixOf "stablehlo.select" mlir)
+
+  , testCase "NUTS kernelStep renders" $ do
+      let config = NUTSConfig { nutsStepSize = 0.1, nutsMaxDepth = 2, nutsDeltaMax = 1000.0 }
+      let k = nuts stdNormalLogPdf stdNormalGrad config
+      let mlir = render1 @'[1] @'F32
+                   [ FuncArg "key" (TensorType [2] UI64)
+                   , FuncArg "pos" (TensorType [1] F32)
+                   , FuncArg "p"   (TensorType [1] F32)
+                   , FuncArg "ld"  (TensorType [] F32)
+                   , FuncArg "g"   (TensorType [1] F32)
+                   ] $ do
+            key <- arg @'[2] @'UI64
+            pos <- arg @'[1] @'F32
+            p   <- arg @'[1] @'F32
+            ld  <- arg @'[] @'F32
+            g   <- arg @'[1] @'F32
+            (state', _info) <- kernelStep k (Key key) (NUTSState pos p ld g)
+            return (nutsPosition state')
+      assertBool "contains rng_bit_generator" (T.isInfixOf "stablehlo.rng_bit_generator" mlir)
+      assertBool "contains while" (T.isInfixOf "stablehlo.while" mlir)
       assertBool "contains select" (T.isInfixOf "stablehlo.select" mlir)
 
   , testCase "MALA kernelStep renders" $ do

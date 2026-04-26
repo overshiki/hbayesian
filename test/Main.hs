@@ -10,6 +10,7 @@ import qualified Test.Examples   as Examples
 import qualified Test.Chain             as Chain
 import qualified Test.PPL                 as PPL
 import qualified Test.CorrelatedGaussian  as CorrG
+import qualified Test.CorrelatedGaussianNUTS as CorrGNUTS
 
 main :: IO ()
 main = defaultMain $ testGroup "HBaysian Tests"
@@ -22,4 +23,5 @@ main = defaultMain $ testGroup "HBaysian Tests"
   , Chain.tests
   , PPL.tests
   , CorrG.tests
+  , CorrGNUTS.tests
   ]

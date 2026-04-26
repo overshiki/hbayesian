@@ -58,6 +58,7 @@ library
         HBayesian.MCMC.RandomWalk
         HBayesian.MCMC.EllipticalSlice
         HBayesian.MCMC.HMC
+        HBayesian.MCMC.NUTS
         HBayesian.MCMC.MALA
     build-depends:
         base        >= 4.18.2.1 && < 4.20
@@ -95,6 +96,7 @@ executable hbayesian-examples
         LogisticRegressionHMC
         BivariateGaussianMALA
         CorrelatedGaussianHMC
+        CorrelatedGaussianNUTS
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
@@ -132,6 +134,28 @@ executable correlated-gaussian-hmc
         TypeOperators
         ScopedTypeVariables
 
+executable correlated-gaussian-nuts
+    import:           warnings
+    main-is:          CorrelatedGaussianNUTSMain.hs
+    other-modules:
+        CorrelatedGaussianHMC
+        CorrelatedGaussianNUTS
+    build-depends:
+        base        >= 4.18.2.1 && < 4.20
+      , hbayesian
+      , hhlo        >= 0.4.0.0  && < 0.5
+      , text        >= 2.0      && < 2.2
+      , vector      >= 0.13     && < 0.14
+    hs-source-dirs:   examples
+    default-language: Haskell2010
+    default-extensions:
+        DataKinds
+        KindSignatures
+        TypeApplications
+        TypeFamilies
+        TypeOperators
+        ScopedTypeVariables
+
 test-suite hbayesian-test
     import:           warnings
     type:             exitcode-stdio-1.0
@@ -144,12 +168,15 @@ test-suite hbayesian-test
         Test.Examples
         Test.Chain
         Test.PPL
+        Test.HHLO.Loops
         Test.CorrelatedGaussian
+        Test.CorrelatedGaussianNUTS
         LinearRegressionRandomWalk
         GaussianProcessEllipticalSlice
         LogisticRegressionHMC
         BivariateGaussianMALA
         CorrelatedGaussianHMC
+        CorrelatedGaussianNUTS
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
