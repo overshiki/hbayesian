@@ -51,9 +51,6 @@ library
         HBayesian.Core
         HBayesian.HHLO.Ops
         HBayesian.HHLO.RNG
-        HBayesian.HHLO.Loops
-        HBayesian.HHLO.Compile
-        HBayesian.HHLO.PJRT
         HBayesian.Chain
         HBayesian.Diagnostics
         HBayesian.PPL
@@ -65,7 +62,7 @@ library
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , directory   >= 1.3.8.1  && < 1.4
-      , hhlo        >= 0.3.0.0  && < 0.4
+      , hhlo        >= 0.4.0.0  && < 0.5
       , text        >= 2.0      && < 2.2
       , vector      >= 0.13     && < 0.14
     hs-source-dirs:   src
@@ -84,7 +81,7 @@ executable hbayesian-demo
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
-      , hhlo        >= 0.3.0.0  && < 0.4
+      , hhlo        >= 0.4.0.0  && < 0.5
       , text        >= 2.0      && < 2.2
     hs-source-dirs:   app
     default-language: Haskell2010
@@ -93,7 +90,6 @@ executable hbayesian-examples
     import:           warnings
     main-is:          Main.hs
     other-modules:
-        Common
         LinearRegressionRandomWalk
         GaussianProcessEllipticalSlice
         LogisticRegressionHMC
@@ -102,7 +98,7 @@ executable hbayesian-examples
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
-      , hhlo        >= 0.3.0.0  && < 0.4
+      , hhlo        >= 0.4.0.0  && < 0.5
       , text        >= 2.0      && < 2.2
       , vector      >= 0.13     && < 0.14
     hs-source-dirs:   examples
@@ -119,12 +115,11 @@ executable correlated-gaussian-hmc
     import:           warnings
     main-is:          CorrelatedGaussianHMCMain.hs
     other-modules:
-        Common
         CorrelatedGaussianHMC
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
-      , hhlo        >= 0.3.0.0  && < 0.4
+      , hhlo        >= 0.4.0.0  && < 0.5
       , text        >= 2.0      && < 2.2
       , vector      >= 0.13     && < 0.14
     hs-source-dirs:   examples
@@ -145,13 +140,11 @@ test-suite hbayesian-test
         Test.Core
         Test.HHLO.Ops
         Test.HHLO.RNG
-        Test.HHLO.Loops
         Test.MCMC
         Test.Examples
         Test.Chain
         Test.PPL
         Test.CorrelatedGaussian
-        Common
         LinearRegressionRandomWalk
         GaussianProcessEllipticalSlice
         LogisticRegressionHMC
@@ -160,7 +153,7 @@ test-suite hbayesian-test
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
-      , hhlo        >= 0.3.0.0  && < 0.4
+      , hhlo        >= 0.4.0.0  && < 0.5
       , text        >= 2.0      && < 2.2
       , vector      >= 0.13     && < 0.14
       , tasty       >= 1.4      && < 1.6

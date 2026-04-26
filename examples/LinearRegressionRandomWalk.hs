@@ -22,10 +22,8 @@ import           HHLO.IR.AST         (FuncArg(..), TensorType(..))
 import           HHLO.IR.Builder
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops
-import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.RandomWalk
 import           HBayesian.Chain
-import           Common
 
 -- | Fixed synthetic dataset (n = 5).
 dataset :: [(Float, Float)]

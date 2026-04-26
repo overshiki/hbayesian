@@ -34,6 +34,10 @@ module HBayesian.HHLO.Ops
   , tpack2
   , tpack3
   , tsigmoid
+    -- * Boolean logic
+  , tand
+  , tor
+  , tnot
   ) where
 
 import           Data.Int        (Int64)
@@ -155,3 +159,22 @@ tpack3 = pack3
 tsigmoid :: forall s. (KnownShape s)
          => Tensor s 'F32 -> Builder (Tensor s 'F32)
 tsigmoid = sigmoid
+
+-----------------------------------------------------------------------------
+-- Boolean logic
+-----------------------------------------------------------------------------
+
+-- | Element-wise logical AND.
+tand :: forall s. (KnownShape s)
+     => Tensor s 'Bool -> Tensor s 'Bool -> Builder (Tensor s 'Bool)
+tand = logicalAnd
+
+-- | Element-wise logical OR.
+tor :: forall s. (KnownShape s)
+    => Tensor s 'Bool -> Tensor s 'Bool -> Builder (Tensor s 'Bool)
+tor = logicalOr
+
+-- | Element-wise logical NOT.
+tnot :: forall s. (KnownShape s)
+     => Tensor s 'Bool -> Builder (Tensor s 'Bool)
+tnot = logicalNot

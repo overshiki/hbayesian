@@ -42,10 +42,8 @@ import           HHLO.IR.AST         (FuncArg(..), TensorType(..))
 import           HHLO.IR.Builder
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops hiding (map, maximum, sort, sqrt)
-import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.HMC
 import           HBayesian.Chain
-import           Common
 
 -----------------------------------------------------------------------------
 -- Ground truth

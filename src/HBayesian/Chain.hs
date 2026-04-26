@@ -29,12 +29,24 @@ module HBayesian.Chain
   , sampleChain
   , parallelChains
   , Diagnostic (..)
+    -- * Low-level PJRT helpers (for manual chain loops)
+  , withPJRTCPU
+  , compileModule
+  , bufferFromF32
+  , bufferFromUI64
+  , bufferToF32
+  , executeModule
+    -- * MLIR rendering
+  , renderKernelStep
   ) where
 
 import           Control.Monad       (when, zipWithM)
 import           Data.Proxy          (Proxy (..))
+import           Data.Text           (Text)
 import           Data.Word           (Word64)
 import qualified Data.Vector.Storable as V
+import           System.Directory    (doesFileExist)
+import           System.Environment  (lookupEnv)
 
 import           HHLO.Core.Types
 import           HHLO.IR.AST         (FuncArg (..), Module, TensorType)
@@ -43,13 +55,49 @@ import           HHLO.IR.Pretty      (render)
 import           HHLO.Runtime.Buffer  (toDevice, toDeviceF32, fromDeviceF32)
 import           HHLO.Runtime.Compile (compileWithOptions, defaultCompileOptions)
 import           HHLO.Runtime.Execute (execute)
+import           HHLO.Runtime.PJRT.Plugin (withPJRT)
 import           HHLO.Runtime.PJRT.Types (PJRTApi, PJRTClient, PJRTExecutable, PJRTBuffer,
                                            bufferTypeU64)
 
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops hiding (map)
-import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.HMC  (HMCState (..))
+
+-----------------------------------------------------------------------------
+-- Plugin discovery
+-----------------------------------------------------------------------------
+
+-- | Return the path to the PJRT CPU plugin.
+--
+-- Priority:
+--   1. @HBAYESIAN_PJRT_PLUGIN@ environment variable
+--   2. @deps/pjrt/libpjrt_cpu.so@ (downloaded by 'scripts/pjrt_script.sh')
+--   3. Runtime error with instructions
+getPluginPath :: IO FilePath
+getPluginPath = do
+    mEnv <- lookupEnv "HBAYESIAN_PJRT_PLUGIN"
+    case mEnv of
+        Just p  -> return p
+        Nothing -> do
+            let defaultPath = "deps/pjrt/libpjrt_cpu.so"
+            exists <- doesFileExist defaultPath
+            if exists
+                then return defaultPath
+                else error $ unlines
+                    [ "PJRT CPU plugin not found at: " ++ defaultPath
+                    , ""
+                    , "To fix this, either:"
+                    , "  1. Run the download script:"
+                    , "       ./scripts/pjrt_script.sh"
+                    , "  2. Set the environment variable to an existing plugin:"
+                    , "       export HBAYESIAN_PJRT_PLUGIN=/path/to/libpjrt_cpu.so"
+                    ]
+
+-- | Bracket-style PJRT initialization using the CPU plugin.
+withPJRTCPU :: (PJRTApi -> PJRTClient -> IO a) -> IO a
+withPJRTCPU action = do
+    path <- getPluginPath
+    withPJRT path action
 
 -----------------------------------------------------------------------------
 -- CompiledKernel
@@ -105,6 +153,15 @@ bufferFromUI64 api client dims vals =
 
 bufferToF32 :: PJRTApi -> PJRTBuffer -> Int -> IO [Float]
 bufferToF32 api buf n = V.toList <$> fromDeviceF32 api buf n
+
+-- | Alias for 'execute' with a more descriptive name.
+executeModule :: PJRTApi -> PJRTExecutable -> [PJRTBuffer] -> IO [PJRTBuffer]
+executeModule = execute
+
+-- | Render a single kernel step to StableHLO MLIR text.
+renderKernelStep :: forall s d. (KnownShape s, KnownDType d)
+                 => [FuncArg] -> Builder (Tensor s d) -> Text
+renderKernelStep args b = render $ moduleFromBuilder @s @d "main" args b
 
 -----------------------------------------------------------------------------
 -- Compiling SimpleKernel (RandomWalk, EllipticalSlice)

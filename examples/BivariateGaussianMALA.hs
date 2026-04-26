@@ -22,11 +22,9 @@ import           HHLO.IR.AST         (FuncArg(..), TensorType(..))
 import           HHLO.IR.Builder
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops
-import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.HMC (HMCState(..))
 import           HBayesian.MCMC.MALA
 import           HBayesian.Chain
-import           Common
 
 -- | Precision matrix Lambda = Sigma^{-1} for
 -- Sigma = [[1.0, 0.8], [0.8, 1.0]]

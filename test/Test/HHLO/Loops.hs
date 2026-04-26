@@ -15,7 +15,6 @@ import           HHLO.IR.AST         (FuncArg(..), TensorType(..), Module(..))
 import           HHLO.IR.Builder
 import           HHLO.IR.Pretty      (render)
 import           HBayesian.HHLO.Ops
-import           HBayesian.HHLO.Loops
 
 -- | Build a 3-tuple and render it.
 render3T :: forall s1 d1 s2 d2 s3 d3.
@@ -34,7 +33,7 @@ tests = testGroup "HHLO.Loops"
             a0 <- arg @'[2] @'F32
             b0 <- arg @'[2] @'F32
             c0 <- arg @'[] @'I64
-            (a1, b1, c1) <- whileLoop3 a0 b0 c0
+            Tuple3 a1 b1 c1 <- whileLoop3 a0 b0 c0
               (\a b c -> do
                 limit <- constant @'[] @'I64 10
                 lessThan c limit)
@@ -43,7 +42,7 @@ tests = testGroup "HHLO.Loops"
                 b' <- tmul b a
                 one <- constant @'[] @'I64 1
                 c' <- add c one
-                return (a', b', c'))
+                returnTuple3 a' b' c')
             return $ a1 ::: b1 ::: c1 ::: TNil
       assertBool "contains stablehlo.while" (T.isInfixOf "stablehlo.while" mlir)
       assertBool "contains stablehlo.return" (T.isInfixOf "stablehlo.return" mlir)
@@ -53,17 +52,17 @@ tests = testGroup "HHLO.Loops"
                    [ FuncArg "p" (TensorType [] Bool)
                    ] $ do
             p <- arg @'[] @'Bool
-            (a, b, c) <- conditional3 p
+            Tuple3 a b c <- conditional3 p
               (do
                 x <- constant @'[2] @'F32 1.0
                 y <- constant @'[2] @'F32 2.0
                 z <- constant @'[] @'I64 3
-                return (x, y, z))
+                returnTuple3 x y z)
               (do
                 x <- constant @'[2] @'F32 0.0
                 y <- constant @'[2] @'F32 0.0
                 z <- constant @'[] @'I64 0
-                return (x, y, z))
+                returnTuple3 x y z)
             return $ a ::: b ::: c ::: TNil
       assertBool "contains stablehlo.if" (T.isInfixOf "stablehlo.if" mlir)
   ]

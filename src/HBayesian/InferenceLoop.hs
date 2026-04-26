@@ -27,7 +27,6 @@ import qualified HHLO.Runtime.Compile as RT
 import qualified HHLO.Runtime.Execute as RTExec
 import qualified HHLO.Runtime.PJRT.Plugin as RT
 import           HBayesian.Core
-import           HBayesian.HHLO.Compile
 import           HBayesian.HHLO.RNG ()
 
 -- | Configuration for the inference loop.

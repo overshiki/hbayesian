@@ -23,10 +23,8 @@ import           HHLO.IR.AST         (FuncArg(..), TensorType(..))
 import           HHLO.IR.Builder
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops
-import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.HMC
 import           HBayesian.Chain
-import           Common
 
 -- | Log-posterior for Bayesian logistic regression.
 logisticRegLogPdf :: Tensor '[3] 'F32 -> Builder (Tensor '[] 'F32)

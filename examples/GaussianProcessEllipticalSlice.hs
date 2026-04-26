@@ -24,10 +24,8 @@ import           HHLO.IR.AST         (FuncArg(..), TensorType(..))
 import           HHLO.IR.Builder
 import           HBayesian.Core
 import           HBayesian.HHLO.Ops
-import           HBayesian.HHLO.PJRT
 import           HBayesian.MCMC.EllipticalSlice
 import           HBayesian.Chain
-import           Common
 
 -- | Observed responses (n = 3).
 yData :: [Float]
