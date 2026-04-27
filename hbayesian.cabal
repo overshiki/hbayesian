@@ -97,6 +97,7 @@ executable hbayesian-examples
         BivariateGaussianMALA
         CorrelatedGaussianHMC
         CorrelatedGaussianNUTS
+        NealFunnel
     build-depends:
         base        >= 4.18.2.1 && < 4.20
       , hbayesian
@@ -171,6 +172,7 @@ test-suite hbayesian-test
         Test.HHLO.Loops
         Test.CorrelatedGaussian
         Test.CorrelatedGaussianNUTS
+        Test.NealFunnel
         LinearRegressionRandomWalk
         GaussianProcessEllipticalSlice
         LogisticRegressionHMC

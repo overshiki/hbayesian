@@ -11,6 +11,7 @@ import qualified Test.Chain             as Chain
 import qualified Test.PPL                 as PPL
 import qualified Test.CorrelatedGaussian  as CorrG
 import qualified Test.CorrelatedGaussianNUTS as CorrGNUTS
+import qualified Test.NealFunnel as NealF
 
 main :: IO ()
 main = defaultMain $ testGroup "HBaysian Tests"
@@ -24,4 +25,5 @@ main = defaultMain $ testGroup "HBaysian Tests"
   , PPL.tests
   , CorrG.tests
   , CorrGNUTS.tests
+  , NealF.tests
   ]

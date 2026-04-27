@@ -2,7 +2,7 @@
 
 Composable Bayesian inference in Haskell on StableHLO / XLA.
 
-HBayesian provides MCMC samplers that compile to [StableHLO](https://github.com/openxla/stablehlo) and execute via PJRT (CPU, GPU, or TPU). It includes RandomWalk MH, Elliptical Slice, HMC, and MALA — along with chain combinators, diagnostics, and a shallow probabilistic programming layer.
+HBayesian provides MCMC samplers that compile to [StableHLO](https://github.com/openxla/stablehlo) and execute via PJRT (CPU, GPU, or TPU). It includes RandomWalk MH, Elliptical Slice, HMC, MALA, and NUTS — along with chain combinators, diagnostics, and a shallow probabilistic programming layer.
 
 ## What makes HBayesian different
 
@@ -47,7 +47,7 @@ data Kernel s d state info = Kernel
   }
 ```
 
-This means the host loop is agnostic to the algorithm inside. You can swap RandomWalk for HMC without changing your execution code. The library provides four kernels out of the box:
+This means the host loop is agnostic to the algorithm inside. You can swap RandomWalk for HMC without changing your execution code. The library provides five kernels out of the box:
 
 | Sampler | Needs gradient? | Best for |
 |---------|-----------------|----------|
@@ -55,6 +55,7 @@ This means the host loop is agnostic to the algorithm inside. You can swap Rando
 | **EllipticalSlice** | No | Gaussian priors, no tuning needed |
 | **HMC** | Yes | High dimensions, informed proposals |
 | **MALA** | Yes | Cheap gradient steps |
+| **NUTS** | Yes | Adaptive trajectory, no tuning of `L` |
 
 ### Chain combinators
 
@@ -114,7 +115,7 @@ cabal build
 ### Run a demo
 
 ```bash
-# Run all 4 basic examples
+# Run all 5 basic examples
 cabal run hbayesian-examples -- --execute
 
 # Run the HMC goodness-of-fit regression test
@@ -157,6 +158,26 @@ main = do
     print (head samples)
 ```
 
+### NUTS (No-U-Turn Sampler)
+
+```haskell
+import HBayesian.Chain
+import HBayesian.MCMC.NUTS
+
+main :: IO ()
+main = do
+    let config = NUTSConfig { nutsStepSize = 0.05
+                            , nutsMaxDepth = 10
+                            , nutsDeltaMax = 1000.0 }
+        kernel = nuts myLogPdf myGradient config
+        ck     = compileNUTS kernel myLogPdf myGradient
+    (samples, diags) <- sampleChain ck (replicate 10 0.0) $
+        burnIn 500 $ defaultChainConfig { ccNumIterations = 1000 }
+    print (head samples)
+```
+
+NUTS eliminates the need to tune the number of leapfrog steps (`L`). It builds a binary tree of leapfrog trajectories and stops automatically when the trajectory begins to double back (a "U-turn"). The entire tree construction happens inside nested XLA `whileLoop` ops.
+
 ### Parallel chains
 
 ```haskell
@@ -189,6 +210,8 @@ logpdf = runPPL myModel
 | `LogisticRegressionHMC` | HMC | Logistic regression with user-provided gradient | `cabal run hbayesian-examples -- --execute` |
 | `BivariateGaussianMALA` | MALA | 2-D correlated Gaussian target | `cabal run hbayesian-examples -- --execute` |
 | `CorrelatedGaussianHMC` | HMC | 5-D Gaussian with statistical GoF validation | `cabal run correlated-gaussian-hmc` |
+| `CorrelatedGaussianNUTS` | NUTS | Same 5-D Gaussian, using NUTS | `cabal run correlated-gaussian-nuts` |
+| `NealFunnel` | HMC + NUTS | Benchmark showing NUTS efficiency advantage | `cabal test --test-options '-p NealFunnel'` |
 
 Each example exposes `makeKernel` and `runChain`. Import them in GHCi to experiment interactively:
 
@@ -232,13 +255,46 @@ Mahalanobis distances:
   observed mean: 5.04  PASS
 ```
 
+### NealFunnel — NUTS efficiency benchmark
+
+`NealFunnel` targets Neal's funnel distribution, the canonical example where NUTS dramatically outperforms fixed-step HMC. The geometry changes drastically across the posterior: at small `y`, the `x` variables are tightly concentrated; at large `y`, they are very diffuse. No single fixed trajectory length works well everywhere.
+
+The experiment compares four configurations on the same 10-D target:
+
+| Configuration | Parameters | Mean ESS |
+|---------------|-----------|----------|
+| HMC-short | `L = 10` leapfrog steps | ~44 |
+| HMC-medium | `L = 50` leapfrog steps | ~50 |
+| HMC-long | `L = 200` leapfrog steps | ~63 |
+| **NUTS** | `max_depth = 10` (adaptive) | **~284** |
+
+NUTS achieves roughly **4.5× higher mean ESS** than the best fixed-step HMC, because it avoids wasting computation on U-turns while still exploring effectively. The entire binary tree construction — direction sampling, leapfrog integration, slice checking, U-turn detection, and candidate selection — happens inside compiled XLA `whileLoop` ops.
+
+Run the benchmark via the test suite:
+
+```bash
+cabal test --test-options '-p NealFunnel'
+```
+
+Or use the module directly in GHCi:
+
+```bash
+cabal repl hbayesian-examples
+```
+
+```haskell
+import NealFunnel
+(samples, diags) <- runNUTS
+print (head samples)
+```
+
 ## Tests
 
 ```bash
 cabal test
 ```
 
-34 tests covering Core, HHLO primitives, RNG, loops, all 4 samplers, chain combinators, PPL, and the CorrelatedGaussian GoF suite.
+39 tests covering Core, HHLO primitives, RNG, loops, all 5 samplers (including NUTS), chain combinators, PPL, the CorrelatedGaussian GoF suite, and the NealFunnel efficiency benchmark.
 
 ## Tutorial
 
@@ -255,7 +311,7 @@ hbayesian/
 |   |-- Chain.hs              -- Chain combinators
 |   |-- Diagnostics.hs        -- MCMC diagnostics
 |   |-- PPL.hs                -- Probabilistic programming layer
-|   |-- MCMC/                 -- Samplers (RandomWalk, EllipticalSlice, HMC, MALA)
+|   |-- MCMC/                 -- Samplers (RandomWalk, EllipticalSlice, HMC, MALA, NUTS)
 |   |-- HHLO/                 -- StableHLO primitives, RNG, loops, PJRT helpers
 |-- examples/                 -- Example suite + CLI entry points
 |-- test/                     -- Test suite
@@ -265,9 +321,9 @@ hbayesian/
 ## Status
 
 - **Phase 1** (Foundation): ✅ Core abstractions, RNG, loops, compilation
-- **Phase 2** (Samplers): ✅ 4 samplers + practical examples
+- **Phase 2** (Samplers): ✅ 5 samplers + practical examples
 - **Phase 3** (Usability): ✅ Chain combinators, PPL, diagnostics, GoF validation
-- **Phase 4+**: NUTS, adaptation, auto-diff — see `doc/` for design documents
+- **Phase 4+**: Adaptation, auto-diff — see `doc/` for design documents
 
 ## License
 
