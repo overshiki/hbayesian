@@ -46,9 +46,6 @@ import           Data.Proxy          (Proxy (..))
 import           Data.Text           (Text)
 import           Data.Word           (Word64)
 import qualified Data.Vector.Storable as V
-import           System.Directory    (doesFileExist)
-import           System.Environment  (lookupEnv)
-
 import           HHLO.Core.Types
 import           HHLO.IR.AST         (FuncArg (..), Module, TensorType)
 import           HHLO.IR.Builder
@@ -56,7 +53,7 @@ import           HHLO.IR.Pretty      (render)
 import           HHLO.Runtime.Buffer  (toDevice, toDeviceF32, fromDeviceF32)
 import           HHLO.Runtime.Compile (compileWithOptions, defaultCompileOptions)
 import           HHLO.Runtime.Execute (execute)
-import           HHLO.Runtime.PJRT.Plugin (withPJRT)
+import           HHLO.Runtime.PJRT.Plugin (withPJRTCPU)
 import           HHLO.Runtime.PJRT.Types (PJRTApi, PJRTClient, PJRTExecutable, PJRTBuffer,
                                            bufferTypeU64)
 
@@ -64,42 +61,6 @@ import           HBayesian.Core
 import           HBayesian.HHLO.Ops hiding (map)
 import           HBayesian.MCMC.HMC  (HMCState (..))
 import           HBayesian.MCMC.NUTS (NUTSState (..), nutsPosition)
-
------------------------------------------------------------------------------
--- Plugin discovery
------------------------------------------------------------------------------
-
--- | Return the path to the PJRT CPU plugin.
---
--- Priority:
---   1. @HBAYESIAN_PJRT_PLUGIN@ environment variable
---   2. @deps/pjrt/libpjrt_cpu.so@ (downloaded by 'scripts/pjrt_script.sh')
---   3. Runtime error with instructions
-getPluginPath :: IO FilePath
-getPluginPath = do
-    mEnv <- lookupEnv "HBAYESIAN_PJRT_PLUGIN"
-    case mEnv of
-        Just p  -> return p
-        Nothing -> do
-            let defaultPath = "deps/pjrt/libpjrt_cpu.so"
-            exists <- doesFileExist defaultPath
-            if exists
-                then return defaultPath
-                else error $ unlines
-                    [ "PJRT CPU plugin not found at: " ++ defaultPath
-                    , ""
-                    , "To fix this, either:"
-                    , "  1. Run the download script:"
-                    , "       ./scripts/pjrt_script.sh"
-                    , "  2. Set the environment variable to an existing plugin:"
-                    , "       export HBAYESIAN_PJRT_PLUGIN=/path/to/libpjrt_cpu.so"
-                    ]
-
--- | Bracket-style PJRT initialization using the CPU plugin.
-withPJRTCPU :: (PJRTApi -> PJRTClient -> IO a) -> IO a
-withPJRTCPU action = do
-    path <- getPluginPath
-    withPJRT path action
 
 -----------------------------------------------------------------------------
 -- CompiledKernel

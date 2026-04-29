@@ -96,15 +96,13 @@ myModel = do
 
 ### Install the PJRT plugin
 
-```bash
-./scripts/pjrt_script.sh
-```
-
-This downloads `libpjrt_cpu.so` into `deps/pjrt/`. To use a custom plugin:
+HBayesian relies on hhlo's PJRT plugin discovery. Follow the [hhlo setup guide](https://hackage.haskell.org/package/hhlo) to obtain `libpjrt_cpu.so`, then set the environment variable:
 
 ```bash
-export HBAYESIAN_PJRT_PLUGIN=/path/to/libpjrt_cpu.so
+export HHLO_PJRT_CPU_PLUGIN=/path/to/libpjrt_cpu.so
 ```
+
+Add this to your `~/.bashrc` to make it persistent.
 
 ### Build
 
